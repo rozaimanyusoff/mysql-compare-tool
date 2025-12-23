@@ -1,0 +1,33 @@
+{
+  "name": "mysql-compare-tool",
+  "version": "1.0.0",
+  "description": "CLI tool to compare and sync tables between local and production MySQL servers",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mysql",
+    "database",
+    "comparison",
+    "sync",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "mysql2": "^3.6.5",
+    "dotenv": "^16.3.1",
+    "inquirer": "^8.2.6",
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/inquirer": "^8.2.10",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  }
+}
