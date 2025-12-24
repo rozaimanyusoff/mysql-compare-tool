@@ -101,11 +101,18 @@ export class DatabaseConnection {
   async getTableStructure(database: string, table: string): Promise<any> {
     if (!this.connection) throw new Error('Not connected');
     const [columns] = await this.connection.query(
-      `SELECT COLUMN_NAME, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS 
+      `SELECT COLUMN_NAME, COLUMN_KEY, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA
+       FROM INFORMATION_SCHEMA.COLUMNS 
        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
       [database, table]
     );
     return columns;
+  }
+
+  async getColumnNames(database: string, table: string): Promise<string[]> {
+    if (!this.connection) throw new Error('Not connected');
+    const structure = await this.getTableStructure(database, table);
+    return (structure as Array<{ COLUMN_NAME: string }>).map(col => col.COLUMN_NAME);
   }
 
   async getTableRowCount(database: string, table: string): Promise<number> {
@@ -168,5 +175,42 @@ export class DatabaseConnection {
     } catch {
       return false;
     }
+  }
+
+  async addColumn(
+    database: string,
+    table: string,
+    columnName: string,
+    columnDefinition: string
+  ): Promise<void> {
+    if (!this.connection) throw new Error('Not connected');
+    const query = `ALTER TABLE ${database}.${table} ADD COLUMN ${columnName} ${columnDefinition}`;
+    await this.connection.query(query);
+  }
+
+  async getColumnDefinition(database: string, table: string, columnName: string): Promise<string> {
+    if (!this.connection) throw new Error('Not connected');
+    const [columns] = await this.connection.query(
+      `SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_KEY
+       FROM INFORMATION_SCHEMA.COLUMNS 
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [database, table, columnName]
+    );
+    
+    const col = (columns as any[])[0];
+    if (!col) throw new Error(`Column ${columnName} not found in ${database}.${table}`);
+    
+    let definition = col.COLUMN_TYPE;
+    if (col.IS_NULLABLE === 'NO') {
+      definition += ' NOT NULL';
+    }
+    if (col.COLUMN_DEFAULT !== null) {
+      definition += ` DEFAULT ${col.COLUMN_DEFAULT}`;
+    }
+    if (col.EXTRA) {
+      definition += ` ${col.EXTRA}`;
+    }
+    
+    return definition;
   }
 }

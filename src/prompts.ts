@@ -141,3 +141,47 @@ export async function promptForSyncErrorAction(): Promise<'replace' | 'skip'> {
   ]);
   return answers.action;
 }
+
+export async function promptForMissingColumnsInLocal(columns: string[]): Promise<boolean> {
+  if (columns.length === 0) return true;
+  
+  console.log('\nMissing columns in local database:');
+  columns.forEach(col => console.log(`  • ${col}`));
+
+  const answers = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'add',
+      message: 'Add these columns to local database?',
+      default: true
+    }
+  ]);
+  return answers.add;
+}
+
+export async function promptForMissingColumnsInProduction(columns: string[]): Promise<'add' | 'skip'> {
+  if (columns.length === 0) return 'add';
+  
+  console.log('\nMissing columns in production database:');
+  columns.forEach(col => console.log(`  • ${col}`));
+
+  const answers = await inquirer.prompt([
+    {
+      type: 'list',
+      name: 'action',
+      message: 'What would you like to do?',
+      choices: [
+        {
+          name: 'Add column to production',
+          value: 'add'
+        },
+        {
+          name: 'Skip to next table',
+          value: 'skip'
+        }
+      ],
+      default: 'skip'
+    }
+  ]);
+  return answers.action;
+}

@@ -9,7 +9,9 @@ import {
   promptForSyncConfirmation,
   promptForDeleteLocalOnly,
   promptContinueToNextDatabase,
-  promptForSyncErrorAction
+  promptForSyncErrorAction,
+  promptForMissingColumnsInLocal,
+  promptForMissingColumnsInProduction
 } from './prompts';
 import {
   compareTableData,
@@ -18,7 +20,9 @@ import {
   getRecordsToSync,
   getTablesToSync,
   TableComparison,
-  DatabaseComparison
+  DatabaseComparison,
+  compareTableColumns,
+  hasTableDifferences
 } from './comparison';
 import {
   printHeader,
@@ -138,7 +142,7 @@ async function main(): Promise<void> {
 
       logger.database(database, `Found ${tables.length} tables. Comparing...`);
 
-      // Compare all tables
+      // Compare all tables with column consistency checks
       const dbComparison: DatabaseComparison = {
         database,
         tables: []
@@ -157,8 +161,14 @@ async function main(): Promise<void> {
               comparison: null,
               error: 'No primary key'
             });
+            logger.table(database, table, 'Skipped: No primary key');
             continue;
           }
+
+          // Check column consistency first
+          const localColumns = await localDB.getColumnNames(database, table);
+          const prodColumns = await prodDB.getColumnNames(database, table);
+          const columnConsistency = compareTableColumns(localColumns, prodColumns);
 
           const localData = await localDB.getTableData(database, table);
           const prodData = await prodDB.getTableData(database, table);
@@ -170,7 +180,11 @@ async function main(): Promise<void> {
             primaryKey,
             localCount: localData.length,
             prodCount: prodData.length,
-            comparison
+            comparison,
+            columnConsistency: {
+              ...columnConsistency,
+              table
+            }
           });
         } catch (error) {
           const err = error as Error;
@@ -192,125 +206,194 @@ async function main(): Promise<void> {
 
       // Count processed tables
       totalTablesProcessed += tables.length;
-      const tablesToSync = getTablesToSync(dbComparison);
 
-      if (tablesToSync.length === 0) {
-        printSuccess('All tables are in sync!');
-        syncedDatabases.push(database);
-        
-        const continueNext = await promptContinueToNextDatabase();
-        if (!continueNext) {
-          continueLoop = false;
-        }
-        continue;
-      }
+      // Auto-sync all tables
+      logger.section('Auto-syncing All Tables');
+      printInfo('Starting automatic synchronization of all tables...\n');
 
-      // Sync table by table
-      logger.section('Table Synchronization');
-      let remainingTables = [...tablesToSync];
-      let skipRemaining = false;
+      let skippedTableCount = 0;
 
-      while (remainingTables.length > 0 && !skipRemaining) {
-        const selectedTable = await promptForTableSyncSelection(remainingTables);
-
-        if (!selectedTable) {
-          logger.info('Skipping remaining tables for this database');
-          printInfo('Skipping remaining tables for this database');
-          skipRemaining = true;
-          break;
+      for (const tableComp of dbComparison.tables) {
+        // Skip tables with errors or no differences
+        if (tableComp.error) {
+          logger.table(database, tableComp.table, `Skipped: ${tableComp.error}`);
+          printWarning(`⚠ Skipping ${tableComp.table}: ${tableComp.error}`);
+          totalTablesSkipped++;
+          skippedTableCount++;
+          continue;
         }
 
-        // Get the comparison data
-        const tableComp = selectedTable.comparison!;
-        const recordsToSync = getRecordsToSync(tableComp);
-        const recordsToDelete = tableComp.onlyInLocal.length;
+        // Check column consistency
+        const colConsistency = tableComp.columnConsistency;
+        if (colConsistency) {
+          // Handle missing columns in local database
+          if (colConsistency.missingInLocal.length > 0) {
+            logger.section(`Column Check: ${tableComp.table}`);
+            printWarning(`Columns missing in local database:`);
+            colConsistency.missingInLocal.forEach(col => printInfo(`  • ${col}`));
 
-        logger.section(`Syncing Table: ${selectedTable.table}`);
-        const confirmSync = await promptForSyncConfirmation(
-          selectedTable.comparison!.onlyInProduction.length,
-          selectedTable.comparison!.modified.length,
-          0
-        );
-
-        if (confirmSync) {
-          try {
-            // Sync the data
-            if (recordsToSync.length > 0) {
-              logger.table(database, selectedTable.table, `Syncing ${recordsToSync.length} records...`);
-              await localDB.insertOrUpdateData(database, selectedTable.table, recordsToSync, selectedTable.primaryKey!);
-              logger.success(`Successfully synced ${recordsToSync.length} records in ${selectedTable.table}`);
-            }
-
-            // Handle deletion if needed
-            if (recordsToDelete > 0) {
-              const confirmDelete = await promptForDeleteLocalOnly();
-              if (confirmDelete) {
-                logger.table(database, selectedTable.table, `Deleting ${recordsToDelete} local-only records...`);
-                for (const record of tableComp.onlyInLocal) {
-                  await localDB.deleteData(database, selectedTable.table, selectedTable.primaryKey!, record[selectedTable.primaryKey!]);
-                }
-                logger.success(`Successfully deleted ${recordsToDelete} records in ${selectedTable.table}`);
-              }
-            }
-
-            totalTablesSynced++;
-          } catch (syncError) {
-            const error = syncError as Error;
-            logger.error(`Sync failed for table "${selectedTable.table}": ${error.message}`, error);
-            printError(`Sync failed for table "${selectedTable.table}": ${error.message}`);
-            totalErrors++;
-            
-            const action = await promptForSyncErrorAction();
-            
-            if (action === 'replace') {
+            const shouldAdd = await promptForMissingColumnsInLocal(colConsistency.missingInLocal);
+            if (shouldAdd) {
               try {
-                logger.info(`Replacing table "${selectedTable.table}" with production version...`);
-                printInfo(`Replacing table "${selectedTable.table}" with production version...`);
-                
-                // Rename local table as backup
-                const backupName = `${selectedTable.table}_backup_${Date.now()}`;
-                await localDB.renameTable(database, selectedTable.table, backupName);
-                logger.table(database, selectedTable.table, `Local table backed up as: ${backupName}`);
-                printInfo(`Local table backed up as: ${backupName}`);
-                
-                // Copy table structure and data from production
-                await localDB.copyTableStructureAndData(
-                  database,
-                  selectedTable.table,
-                  database,
-                  selectedTable.table,
-                  prodDB
-                );
-                
-                logger.success(`Table "${selectedTable.table}" successfully replaced with production version`);
-                totalTablesSynced++;
-              } catch (replaceError) {
-                const replaceErr = replaceError as Error;
-                logger.error(`Failed to replace table: ${replaceErr.message}`, replaceErr);
-                printError(`Failed to replace table: ${replaceErr.message}`);
-                printWarning(`Please manually fix the table "${selectedTable.table}" and try again`);
+                for (const col of colConsistency.missingInLocal) {
+                  const colDef = await prodDB.getColumnDefinition(database, tableComp.table, col);
+                  await localDB.addColumn(database, tableComp.table, col, colDef);
+                  logger.table(database, tableComp.table, `Added column: ${col}`);
+                  printSuccess(`✓ Added column: ${col}`);
+                }
+              } catch (err) {
+                const error = err as Error;
+                logger.error(`Failed to add columns to ${tableComp.table}: ${error.message}`, err as Error);
+                printError(`Failed to add columns: ${error.message}`);
                 totalErrors++;
+                continue;
               }
             } else {
-              logger.table(database, selectedTable.table, 'Skipped syncing');
-              printWarning(`Skipped syncing table "${selectedTable.table}"`);
+              logger.table(database, tableComp.table, 'Skipped adding missing local columns');
+              printWarning(`Skipping column addition for ${tableComp.table}`);
               totalTablesSkipped++;
+              skippedTableCount++;
+              continue;
             }
           }
-        } else {
-          logger.table(database, selectedTable.table, 'Sync cancelled by user');
-          printWarning('Sync cancelled for this table');
-          totalTablesSkipped++;
+
+          // Handle missing columns in production database
+          if (colConsistency.missingInProduction.length > 0) {
+            logger.section(`Column Check: ${tableComp.table}`);
+            printWarning(`Columns missing in production database:`);
+            colConsistency.missingInProduction.forEach(col => printInfo(`  • ${col}`));
+
+            const action = await promptForMissingColumnsInProduction(colConsistency.missingInProduction);
+            if (action === 'skip') {
+              logger.table(database, tableComp.table, 'Skipped: Columns missing in production');
+              printWarning(`Skipping ${tableComp.table}: Columns missing in production`);
+              totalTablesSkipped++;
+              skippedTableCount++;
+              continue;
+            } else {
+              try {
+                for (const col of colConsistency.missingInProduction) {
+                  const colDef = await localDB.getColumnDefinition(database, tableComp.table, col);
+                  await prodDB.addColumn(database, tableComp.table, col, colDef);
+                  logger.table(database, tableComp.table, `Added column to production: ${col}`);
+                  printSuccess(`✓ Added column to production: ${col}`);
+                }
+              } catch (err) {
+                const error = err as Error;
+                logger.error(`Failed to add columns to production ${tableComp.table}: ${error.message}`, err as Error);
+                printError(`Failed to add columns to production: ${error.message}`);
+                totalErrors++;
+              }
+            }
+          }
         }
 
-        // Remove synced table from remaining
-        remainingTables = remainingTables.filter(t => t.table !== selectedTable.table);
+        // Skip if no data differences
+        if (!tableComp.comparison || (!hasTableDifferences(tableComp))) {
+          logger.table(database, tableComp.table, 'Already in sync');
+          printSuccess(`✓ ${tableComp.table}: Already in sync`);
+          continue;
+        }
+
+        // Sync the table data
+        logger.section(`Syncing Table: ${tableComp.table}`);
+        
+        const recordsToSync = getRecordsToSync(tableComp.comparison);
+        const recordsToDelete = tableComp.comparison.onlyInLocal.length;
+
+        printInfo(`${tableComp.table}:`);
+        console.log(`  • Records to add: ${tableComp.comparison.onlyInProduction.length}`);
+        console.log(`  • Records to update: ${tableComp.comparison.modified.length}`);
+        console.log(`  • Records to delete: ${recordsToDelete}\n`);
+
+        try {
+          // Sync the data
+          if (recordsToSync.length > 0) {
+            logger.table(database, tableComp.table, `Syncing ${recordsToSync.length} records...`);
+            printInfo(`Syncing ${recordsToSync.length} records...`);
+            await localDB.insertOrUpdateData(database, tableComp.table, recordsToSync, tableComp.primaryKey!);
+            logger.success(`Successfully synced ${recordsToSync.length} records in ${tableComp.table}`);
+            printSuccess(`✓ Synced ${recordsToSync.length} records`);
+          }
+
+          // Handle deletion if needed
+          if (recordsToDelete > 0) {
+            logger.table(database, tableComp.table, `Found ${recordsToDelete} local-only records`);
+            const confirmDelete = await promptForDeleteLocalOnly();
+            if (confirmDelete) {
+              logger.table(database, tableComp.table, `Deleting ${recordsToDelete} local-only records...`);
+              printInfo(`Deleting ${recordsToDelete} records...`);
+              for (const record of tableComp.comparison.onlyInLocal) {
+                await localDB.deleteData(database, tableComp.table, tableComp.primaryKey!, record[tableComp.primaryKey!]);
+              }
+              logger.success(`Successfully deleted ${recordsToDelete} records in ${tableComp.table}`);
+              printSuccess(`✓ Deleted ${recordsToDelete} records`);
+            } else {
+              logger.table(database, tableComp.table, 'User declined deletion of local-only records');
+              printWarning(`Skipped deletion of ${recordsToDelete} local-only records`);
+            }
+          }
+
+          totalTablesSynced++;
+          logger.table(database, tableComp.table, 'Successfully synced');
+        } catch (syncError) {
+          const error = syncError as Error;
+          logger.error(`Sync failed for table "${tableComp.table}": ${error.message}`, error);
+          printError(`Sync failed for table "${tableComp.table}": ${error.message}`);
+          totalErrors++;
+          
+          const action = await promptForSyncErrorAction();
+          
+          if (action === 'replace') {
+            try {
+              logger.info(`Replacing table "${tableComp.table}" with production version...`);
+              printInfo(`Replacing table "${tableComp.table}" with production version...`);
+              
+              // Rename local table as backup
+              const backupName = `${tableComp.table}_backup_${Date.now()}`;
+              await localDB.renameTable(database, tableComp.table, backupName);
+              logger.table(database, tableComp.table, `Local table backed up as: ${backupName}`);
+              printInfo(`Local table backed up as: ${backupName}`);
+              
+              // Copy table structure and data from production
+              await localDB.copyTableStructureAndData(
+                database,
+                tableComp.table,
+                database,
+                tableComp.table,
+                prodDB
+              );
+              
+              logger.success(`Table "${tableComp.table}" successfully replaced with production version`);
+              printSuccess(`✓ Table replaced with production version`);
+              totalTablesSynced++;
+            } catch (replaceError) {
+              const replaceErr = replaceError as Error;
+              logger.error(`Failed to replace table: ${replaceErr.message}`, replaceErr);
+              printError(`Failed to replace table: ${replaceErr.message}`);
+              printWarning(`Please manually fix the table "${tableComp.table}" and try again`);
+              totalErrors++;
+              totalTablesSkipped++;
+              skippedTableCount++;
+            }
+          } else {
+            logger.table(database, tableComp.table, 'Skipped syncing');
+            printWarning(`Skipped syncing table "${tableComp.table}"`);
+            totalTablesSkipped++;
+            skippedTableCount++;
+          }
+        }
       }
 
       // Mark database as synced
       syncedDatabases.push(database);
       logger.database(database, `Sync session completed`);
       logger.success(`Database "${database}" sync session completed`);
+      printSection('Database Sync Complete');
+      printSuccess(`✓ Synced ${totalTablesSynced} table(s) in database "${database}"`);
+      if (skippedTableCount > 0) {
+        printWarning(`⚠ Skipped ${skippedTableCount} table(s)`);
+      }
 
       // Ask to continue to next database
       const continueNext = await promptContinueToNextDatabase();

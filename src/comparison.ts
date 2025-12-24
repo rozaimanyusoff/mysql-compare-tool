@@ -7,12 +7,20 @@ export interface ComparisonResult {
   identical: any[];
 }
 
+export interface ColumnConsistency {
+  table: string;
+  missingInLocal: string[];
+  missingInProduction: string[];
+  allColumnsMatch: boolean;
+}
+
 export interface TableComparison {
   table: string;
   primaryKey: string | null;
   localCount: number;
   prodCount: number;
   comparison: ComparisonResult | null;
+  columnConsistency?: ColumnConsistency;
   error?: string;
 }
 
@@ -60,6 +68,24 @@ export function compareTableData(
   }
 
   return result;
+}
+
+export function compareTableColumns(
+  localColumns: string[],
+  prodColumns: string[]
+): ColumnConsistency {
+  const localSet = new Set(localColumns);
+  const prodSet = new Set(prodColumns);
+
+  const missingInLocal = prodColumns.filter(col => !localSet.has(col));
+  const missingInProduction = localColumns.filter(col => !prodSet.has(col));
+
+  return {
+    table: '',
+    missingInLocal,
+    missingInProduction,
+    allColumnsMatch: missingInLocal.length === 0 && missingInProduction.length === 0
+  };
 }
 
 export function hasTableDifferences(comparison: TableComparison): boolean {
