@@ -101,11 +101,10 @@ export function printComparisonSummary(result: ComparisonResult): void {
 
   console.log(chalk.green(`✓ Identical Records: ${result.identical.length}`));
   console.log(chalk.yellow(`⚠ Modified Records: ${result.modified.length}`));
-  console.log(chalk.red(`✗ Only in Local: ${result.onlyInLocal.length}`));
-  console.log(chalk.blue(`⬆ Only in Production: ${result.onlyInProduction.length}`));
+  console.log(chalk.blue(`⬆ To be Added from Production: ${result.onlyInProduction.length}`));
 
   if (result.onlyInProduction.length > 0) {
-    console.log('\n' + chalk.bold.blue('Records Only in Production (will be added to local):'));
+    console.log('\n' + chalk.bold.blue('Records to be Added from Production:'));
     console.log(JSON.stringify(result.onlyInProduction, null, 2).substring(0, 500) + '...');
   }
 
@@ -114,14 +113,6 @@ export function printComparisonSummary(result: ComparisonResult): void {
     console.log(JSON.stringify(result.modified.slice(0, 2), null, 2));
     if (result.modified.length > 2) {
       console.log(`... and ${result.modified.length - 2} more records`);
-    }
-  }
-
-  if (result.onlyInLocal.length > 0) {
-    console.log('\n' + chalk.bold.red('Records Only in Local (no action):'));
-    console.log(JSON.stringify(result.onlyInLocal.slice(0, 2), null, 2));
-    if (result.onlyInLocal.length > 2) {
-      console.log(`... and ${result.onlyInLocal.length - 2} more records`);
     }
   }
 }

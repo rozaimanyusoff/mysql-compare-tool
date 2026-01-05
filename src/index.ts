@@ -7,7 +7,6 @@ import {
   promptForDatabaseSelectionWithExclusion,
   promptForTableSyncSelection,
   promptForSyncConfirmation,
-  promptForDeleteLocalOnly,
   promptContinueToNextDatabase,
   promptForSyncErrorAction,
   promptForMissingColumnsInLocal,
@@ -299,12 +298,10 @@ async function main(): Promise<void> {
         logger.section(`Syncing Table: ${tableComp.table}`);
         
         const recordsToSync = getRecordsToSync(tableComp.comparison);
-        const recordsToDelete = tableComp.comparison.onlyInLocal.length;
 
         printInfo(`${tableComp.table}:`);
         console.log(`  • Records to add: ${tableComp.comparison.onlyInProduction.length}`);
-        console.log(`  • Records to update: ${tableComp.comparison.modified.length}`);
-        console.log(`  • Records to delete: ${recordsToDelete}\n`);
+        console.log(`  • Records to update: ${tableComp.comparison.modified.length}\n`);
 
         try {
           // Sync the data
@@ -314,24 +311,6 @@ async function main(): Promise<void> {
             await localDB.insertOrUpdateData(database, tableComp.table, recordsToSync, tableComp.primaryKey!);
             logger.success(`Successfully synced ${recordsToSync.length} records in ${tableComp.table}`);
             printSuccess(`✓ Synced ${recordsToSync.length} records`);
-          }
-
-          // Handle deletion if needed
-          if (recordsToDelete > 0) {
-            logger.table(database, tableComp.table, `Found ${recordsToDelete} local-only records`);
-            const confirmDelete = await promptForDeleteLocalOnly();
-            if (confirmDelete) {
-              logger.table(database, tableComp.table, `Deleting ${recordsToDelete} local-only records...`);
-              printInfo(`Deleting ${recordsToDelete} records...`);
-              for (const record of tableComp.comparison.onlyInLocal) {
-                await localDB.deleteData(database, tableComp.table, tableComp.primaryKey!, record[tableComp.primaryKey!]);
-              }
-              logger.success(`Successfully deleted ${recordsToDelete} records in ${tableComp.table}`);
-              printSuccess(`✓ Deleted ${recordsToDelete} records`);
-            } else {
-              logger.table(database, tableComp.table, 'User declined deletion of local-only records');
-              printWarning(`Skipped deletion of ${recordsToDelete} local-only records`);
-            }
           }
 
           totalTablesSynced++;

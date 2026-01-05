@@ -1,33 +1,30 @@
 {
   "name": "mysql-compare-tool",
-  "version": "1.0.0",
-  "description": "CLI tool to compare and sync tables between local and production MySQL servers",
+  "version": "2.0.0",
+  "description": "Web-based MySQL database comparison and synchronization tool",
   "main": "dist/index.js",
   "scripts": {
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "build": "tsc",
-    "clean": "rm -rf dist"
+    "setup": "bash setup-web.sh",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm run preview"
   },
   "keywords": [
     "mysql",
     "database",
     "comparison",
     "sync",
-    "cli"
+    "web",
+    "react"
   ],
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "mysql2": "^3.6.5",
-    "dotenv": "^16.3.1",
-    "inquirer": "^8.2.6",
-    "chalk": "^4.1.2"
-  },
   "devDependencies": {
-    "@types/node": "^20.10.6",
-    "@types/inquirer": "^8.2.10",
-    "typescript": "^5.3.3",
-    "ts-node": "^10.9.2"
+    "concurrently": "^9.2.1"
   }
 }
